@@ -5,9 +5,9 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 jobs:
-   # Step 1: Checkout code
   start-httpbin:
     runs-on: ubuntu-latest
     services:
@@ -17,45 +17,36 @@ jobs:
           - 91:80
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
       - name: Wait for httpbin to start
         run: |
-          echo "Waiting for httpbin to be ready..."
-          sleep 5
-      # Step 2: Launch on Browser
-      - name: Test httpbin endpoint
-        run: |
-          curl http://localhost:91/get
-      - name: Run command inside container
-        run: |
-          # Instead of interactive bash, run commands non-interactively
-          docker exec httpbin bash -c "echo 'Inside container'; ls /; cat /etc/hosts"
-      # Step 3: Create Directories and copy file to local
-      - name: Copy results back to local system
-        run: |
-          mkdir -p ./output
-          docker cp httpbin:/tmp/output ./output
-      
+          echo "Waiting for httpbin service..."
+          for i in {1..10}; do
+            curl -s http://localhost:91/get && break
+            echo "HTTPBin not ready yet... retrying ($i/10)"
+            sleep 3
+          done
+
   install-jmeter:
     runs-on: ubuntu-latest
+    needs: start-httpbin
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-      # Step 4: Install Java in Container
-      - name: Install Java, wget, unzip
+        uses: actions/checkout@v4
+
+      - name: Install Java and tools
         run: |
           sudo apt update
           sudo apt install -y openjdk-11-jre wget unzip
-      # Step 5: Install Jmeter in Container
-      - name: Download and install Apache JMeter
+
+      - name: Install JMeter
         run: |
           wget https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.zip
           sudo unzip apache-jmeter-5.6.3.zip -d /opt/
           sudo ln -s /opt/apache-jmeter-5.6.3/bin/jmeter /usr/local/bin/jmeter
+          jmeter -v
 
-      - name: Verify JMeter installation
-        run: jmeter -v
-      
       - name: Run JMeter Test
         run: |
           mkdir -p /tmp/results
@@ -63,8 +54,8 @@ jobs:
                  -l /tmp/results/results.jtl \
                  -e -o /tmp/results/report
 
-      - name: Upload Test Report
-        uses: actions/upload-artifact@v3
+      - name: Upload JMeter Report
+        uses: actions/upload-artifact@v4
         with:
           name: JMeter-Report
           path: /tmp/results/report
