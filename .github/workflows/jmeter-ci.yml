@@ -67,6 +67,15 @@ jobs:
                  -e -o /tmp/results/report
           echo "✅ JMeter test completed"
 
+      - name: Install JMeter Plugins (Ultimate Thread Group)
+        run: |
+          JMETER_HOME=/opt/apache-jmeter-5.6.3
+          wget -q https://jmeter-plugins.org/get/ -O /tmp/JMeterPluginsManager.jar
+          mkdir -p $JMETER_HOME/lib/ext
+          cp /tmp/JMeterPluginsManager.jar $JMETER_HOME/lib/ext/
+          java -cp $JMETER_HOME/lib/ext/JMeterPluginsManager.jar org.jmeterplugins.repository.PluginManagerCMDInstaller
+          $JMETER_HOME/bin/PluginsManagerCMD.sh install jpgc-casutg
+          
       - name: Upload JMeter Report
         uses: actions/upload-artifact@v4
         with:
