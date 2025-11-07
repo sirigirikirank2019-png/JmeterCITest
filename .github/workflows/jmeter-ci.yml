@@ -15,37 +15,46 @@ jobs:
         ports:
           - 91:80
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Wait for httpbin to start
-        shell: bash
+      - name: Verify environment
         run: |
-          set -e  # stop on any error
+          echo "Shell: $SHELL"
+          which bash || echo "bash not found"
+          which curl || echo "curl not found"
+          bash --version || echo "bash version check failed"
+          echo "✅ Environment check complete"
+  
+      - name: Install curl
+        run: |
           sudo apt update
           sudo apt install -y curl
+          which curl
+          echo "✅ Curl installed"
+  
+      - name: Test httpbin reachability
+        shell: bash
+        run: |
           echo "Waiting for httpbin service..."
           for i in {1..10}; do
             if curl -s http://localhost:91/get > /dev/null; then
-              echo "HTTPBin is up!"
+              echo "✅ HTTPBin is up!"
               break
             fi
             echo "HTTPBin not ready yet... retrying ($i/10)"
             sleep 3
           done
-        
+          
       - name: Install Java and JMeter
         run: |
-          sudo apt update
-          sudo apt install -y openjdk-17-jre-headless wget unzip
-          wget -q https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.zip
-          unzip -q apache-jmeter-5.6.3.zip -d /opt/
-          export JMETER_HOME=/opt/apache-jmeter-5.6.3
-          export PATH=$JMETER_HOME/bin:$PATH
-          jmeter -v
+            sudo apt update
+            sudo apt install -y openjdk-17-jre-headless wget unzip
+            wget -q https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.zip
+            unzip -q apache-jmeter-5.6.3.zip -d /opt/
+            export JMETER_HOME=/opt/apache-jmeter-5.6.3
+            export PATH=$JMETER_HOME/bin:$PATH
+            jmeter -v
       - name: Run JMeter Test
         run: |
-          mkdir -p /tmp/results
-          jmeter -n -t ./P01_HTTPBinAPI_PT_StreeTest.jmx \
-                 -l /tmp/results/results.jtl \
-                 -e -o /tmp/results/report
+            mkdir -p /tmp/results
+            jmeter -n -t ./P01_HTTPBinAPI_PT_StreeTest.jmx \
+                   -l /tmp/results/results.jtl \
+                   -e -o /tmp/results/report
