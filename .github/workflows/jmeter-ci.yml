@@ -1,4 +1,4 @@
-name: JMeter + Metrics CI/CD
+name: Metrics Stack Health Check
 
 on:
   workflow_dispatch:
@@ -7,14 +7,8 @@ on:
       - main
 
 jobs:
-  jmeter-metrics:
+  metrics-check:
     runs-on: ubuntu-22.04
-
-    services:
-      httpbin:
-        image: kennethreitz/httpbin
-        ports:
-          - 91:80
 
     steps:
       - name: Checkout code
@@ -23,12 +17,11 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl wget unzip openjdk-17-jre-headless jq docker-compose
+          sudo apt-get install -y curl jq docker-compose
           echo "✅ Prerequisites installed"
 
       - name: Start Metrics Stack (cAdvisor + Prometheus + Grafana)
         run: |
-          # Create prometheus config dynamically
           cat <<EOF > prometheus.yml
           global:
             scrape_interval: 5s
@@ -38,7 +31,6 @@ jobs:
                 - targets: ['cadvisor:8080']
           EOF
 
-          # Create docker-compose.yml dynamically
           cat <<EOF > docker-compose.yml
           version: '3.9'
           services:
@@ -68,11 +60,11 @@ jobs:
                 - "3000:3000"
           EOF
 
-          # Start stack
           docker-compose up -d
+          echo "Waiting 20s for services..."
           sleep 20
 
-      - name: Wait for Metrics Services
+      - name: Wait for services
         run: |
           for i in {1..15}; do
             if curl -s -f http://localhost:8080/metrics > /dev/null && \
@@ -85,56 +77,43 @@ jobs:
             sleep 5
           done
 
+      - name: Check Prometheus target
+        run: |
+          TARGET_STATUS=$(curl -s http://localhost:9090/api/v1/targets | jq -r '.data.activeTargets[] | select(.labels.job=="cadvisor") | .health')
+          echo "Prometheus target cadvisor status: $TARGET_STATUS"
+
+      - name: Test Prometheus metrics
+        run: |
+          for metric in container_cpu_usage_seconds_total container_memory_usage_bytes container_network_receive_bytes_total container_network_transmit_bytes_total; do
+            COUNT=$(curl -s "http://localhost:9090/api/v1/query?query=$metric" | jq '.data.result | length')
+            echo "Metric $metric: $COUNT data points"
+          done
+
       - name: Import Grafana Dashboard
         run: |
           curl -s -X POST -H "Content-Type: application/json" \
             -u admin:admin \
             -d @grafana-dashboard.json \
-            http://localhost:3000/api/dashboards/db
+            http://localhost:3000/api/dashboards/db \
+            | jq '.'
 
-      - name: Install JMeter
+      - name: Create Grafana Snapshot
         run: |
-          wget -q https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.zip
-          unzip -q apache-jmeter-5.6.3.zip -d /opt/
-          sudo ln -sf /opt/apache-jmeter-5.6.3/bin/jmeter /usr/local/bin/jmeter
-          jmeter -v
-
-      - name: Install JMeter Plugins (Ultimate Thread Group)
-        run: |
-          JMETER_HOME=/opt/apache-jmeter-5.6.3
-          wget -q https://jmeter-plugins.org/get/ -O /tmp/JMeterPluginsManager.jar
-          wget -q https://repo1.maven.org/maven2/kg/apc/cmdrunner/2.3/cmdrunner-2.3.jar -O /tmp/cmdrunner-2.3.jar
-          mkdir -p $JMETER_HOME/lib/ext
-          cp /tmp/JMeterPluginsManager.jar $JMETER_HOME/lib/ext/
-          cp /tmp/cmdrunner-2.3.jar $JMETER_HOME/lib/
-          java -cp $JMETER_HOME/lib/ext/JMeterPluginsManager.jar org.jmeterplugins.repository.PluginManagerCMDInstaller
-          $JMETER_HOME/bin/PluginsManagerCMD.sh install jpgc-casutg
-
-      - name: Run JMeter Test
-        run: |
-          mkdir -p /tmp/results
-          jmeter -n -t ./P01_HTTPBinAPI_PT_StreeTest.jmx \
-                 -l /tmp/results/results.jtl \
-                 -e -o /tmp/results/report
-
-      - name: Collect Reports
-        run: |
-          mkdir -p /tmp/final_reports
-          cp -r /tmp/results/report /tmp/final_reports/JMeter-Report
-          curl -s http://localhost:8080/metrics > /tmp/final_reports/cadvisor_metrics.txt
-
-      - name: Grafana Dashboard Snapshot URL
-        run: |
-          mkdir -p /tmp/final_reports/grafana
-          curl -s -u admin:admin \
+          SNAPSHOT_URL=$(curl -s -u admin:admin \
             -H "Content-Type: application/json" \
             -X POST \
             -d '{"dashboard":{"uid":"cadvisor"},"name":"cadvisor-snapshot","expires":3600}' \
-            http://localhost:3000/api/snapshots \
-            | jq -r '.url' > /tmp/final_reports/grafana/dashboard_url.txt
+            http://localhost:3000/api/snapshots | jq -r '.url')
+          echo "Grafana snapshot URL: $SNAPSHOT_URL"
 
-      - name: Upload All Reports
+      - name: Save cAdvisor metrics
+        run: |
+          curl -s http://localhost:8080/metrics > cadvisor_metrics.txt
+          echo "✅ cAdvisor metrics saved"
+          
+      - name: Upload Reports
         uses: actions/upload-artifact@v4
         with:
-          name: Performance-Reports
-          path: /tmp/final_reports
+          name: Metrics-Reports
+          path: |
+            cadvisor_metrics.txt
