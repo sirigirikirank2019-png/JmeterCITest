@@ -26,6 +26,7 @@ jobs:
             echo "HTTPBin not ready yet... retrying ($i/10)"
             sleep 3
           done
+      
       - name: Install Java and JMeter
         run: |
           sudo apt update
@@ -35,6 +36,7 @@ jobs:
           export JMETER_HOME=/opt/apache-jmeter-5.6.3
           export PATH=$JMETER_HOME/bin:$PATH
           jmeter -v
+      
       - name: Run JMeter Test
         run: |
           mkdir -p /tmp/results
