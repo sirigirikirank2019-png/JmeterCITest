@@ -125,6 +125,7 @@ jobs:
 
       - name: Grafana Dashboard Snapshot URL
         run: |
+          mkdir -p /tmp/final_reports/grafana
           curl -s -u admin:admin \
             -H "Content-Type: application/json" \
             -X POST \
