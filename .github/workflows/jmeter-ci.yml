@@ -9,11 +9,17 @@ on:
 
 defaults:
   run:
-    shell: bash  # ensure all steps use bash
+    shell: bash  # ensures all steps use bash (avoids exit code 127)
 
 jobs:
   jmeter-test:
     runs-on: ubuntu-22.04
+
+    services:
+      httpbin:
+        image: kennethreitz/httpbin
+        ports:
+          - 91:80
 
     steps:
       - name: Checkout code
@@ -22,14 +28,12 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl wget unzip openjdk-17-jre-headless docker.io
+          sudo apt-get install -y curl wget unzip openjdk-17-jre-headless
+          echo "✅ Prerequisites installed"
 
-      - name: Start HTTPBin service (with fallback)
+      - name: Wait for HTTPBin service
         run: |
-          echo "Attempting to start httpbin via GitHub service container..."
-          docker run -d --name httpbin -p 91:80 kennethreitz/httpbin || echo "Docker start failed"
-
-          echo "Waiting for HTTPBin..."
+          echo "Waiting for httpbin service to start..."
           for i in {1..10}; do
             if curl -s http://localhost:91/get > /dev/null; then
               echo "✅ HTTPBin is up!"
@@ -39,9 +43,9 @@ jobs:
             sleep 3
           done
 
-          # Fallback if container didn't start
+          # Final check
           if ! curl -s http://localhost:91/get > /dev/null; then
-            echo "⚠️ Service not detected, starting manually..."
+            echo "⚠️ HTTPBin service not responding, trying manual start..."
             docker rm -f httpbin || true
             docker run -d --name httpbin -p 91:80 kennethreitz/httpbin
             sleep 5
@@ -52,7 +56,7 @@ jobs:
         run: |
           wget -q https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.zip
           unzip -q apache-jmeter-5.6.3.zip -d /opt/
-          sudo ln -s /opt/apache-jmeter-5.6.3/bin/jmeter /usr/local/bin/jmeter
+          sudo ln -sf /opt/apache-jmeter-5.6.3/bin/jmeter /usr/local/bin/jmeter
           jmeter -v
 
       - name: Run JMeter Test
@@ -61,6 +65,7 @@ jobs:
           jmeter -n -t ./P01_HTTPBinAPI_PT_StreeTest.jmx \
                  -l /tmp/results/results.jtl \
                  -e -o /tmp/results/report
+          echo "✅ JMeter test completed"
 
       - name: Upload JMeter Report
         uses: actions/upload-artifact@v4
