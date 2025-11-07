@@ -1,18 +1,13 @@
-name: JMeter CI/CD
+name: JMeter + Metrics CI/CD
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  pull_request:
-  workflow_dispatch:
-
-defaults:
-  run:
-    shell: bash  # ensures all steps use bash (avoids exit code 127)
 
 jobs:
-  jmeter-test:
+  jmeter-metrics:
     runs-on: ubuntu-22.04
 
     services:
@@ -20,16 +15,6 @@ jobs:
         image: kennethreitz/httpbin
         ports:
           - 91:80
-      cadvisor:
-        image: gcr.io/cadvisor/cadvisor:latest
-        ports:
-          - 8080:8080
-        options: >-
-          --privileged
-          --volume=/:/rootfs:ro
-          --volume=/var/run:/var/run:rw
-          --volume=/sys:/sys:ro
-          --volume=/var/lib/docker/:/var/lib/docker:ro
 
     steps:
       - name: Checkout code
@@ -38,43 +23,74 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl wget unzip openjdk-17-jre-headless
+          sudo apt-get install -y curl wget unzip openjdk-17-jre-headless jq docker-compose
           echo "✅ Prerequisites installed"
 
-      - name: Wait for HTTPBin and cAdvisor to start
-        shell: bash
+      - name: Start Metrics Stack (cAdvisor + Prometheus + Grafana)
         run: |
-          sudo apt update
-          sudo apt install -y curl
-      
-          echo "Waiting for HTTPBin service to start..."
+          # Create prometheus config dynamically
+          cat <<EOF > prometheus.yml
+          global:
+            scrape_interval: 5s
+          scrape_configs:
+            - job_name: 'cadvisor'
+              static_configs:
+                - targets: ['cadvisor:8080']
+          EOF
+
+          # Create docker-compose.yml dynamically
+          cat <<EOF > docker-compose.yml
+          version: '3.9'
+          services:
+            cadvisor:
+              image: gcr.io/cadvisor/cadvisor:latest
+              privileged: true
+              ports:
+                - "8080:8080"
+              volumes:
+                - /:/rootfs:ro
+                - /var/run:/var/run:rw
+                - /sys:/sys:ro
+                - /var/lib/docker/:/var/lib/docker:ro
+
+            prometheus:
+              image: prom/prometheus:latest
+              ports:
+                - "9090:9090"
+              volumes:
+                - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+            grafana:
+              image: grafana/grafana:latest
+              environment:
+                GF_SECURITY_ADMIN_PASSWORD: admin
+              ports:
+                - "3000:3000"
+          EOF
+
+          # Start stack
+          docker-compose up -d
+          sleep 20
+
+      - name: Wait for Metrics Services
+        run: |
           for i in {1..15}; do
-            if curl -s -f http://localhost:91/get > /dev/null; then
-              echo "✅ HTTPBin is up!"
+            if curl -s -f http://localhost:8080/metrics > /dev/null && \
+               curl -s -f http://localhost:9090/metrics > /dev/null && \
+               curl -s -f http://localhost:3000/api/health > /dev/null; then
+              echo "✅ All services are up!"
               break
             fi
-            echo "HTTPBin not ready yet... retrying ($i/15)"
-            sleep 5
-          done
-      
-          echo "Waiting for cAdvisor service to start..."
-          for i in {1..15}; do
-            if curl -s -f http://localhost:8080/metrics > /dev/null; then
-              echo "✅ cAdvisor is up!"
-              break
-            fi
-            echo "cAdvisor not ready yet... retrying ($i/15)"
+            echo "Waiting for services..."
             sleep 5
           done
 
-          # Final check
-          if ! curl -s http://localhost:91/get > /dev/null; then
-            echo "⚠️ HTTPBin service not responding, trying manual start..."
-            docker rm -f httpbin || true
-            docker run -d --name httpbin -p 91:80 kennethreitz/httpbin
-            sleep 5
-            curl -v http://localhost:91/get || (echo "❌ HTTPBin failed to start" && exit 1)
-          fi
+      - name: Import Grafana Dashboard
+        run: |
+          curl -s -X POST -H "Content-Type: application/json" \
+            -u admin:admin \
+            -d @grafana-dashboard.json \
+            http://localhost:3000/api/dashboards/db
 
       - name: Install JMeter
         run: |
@@ -86,37 +102,36 @@ jobs:
       - name: Install JMeter Plugins (Ultimate Thread Group)
         run: |
           JMETER_HOME=/opt/apache-jmeter-5.6.3
-          echo "📦 Installing JMeter Plugins Manager..."
           wget -q https://jmeter-plugins.org/get/ -O /tmp/JMeterPluginsManager.jar
           wget -q https://repo1.maven.org/maven2/kg/apc/cmdrunner/2.3/cmdrunner-2.3.jar -O /tmp/cmdrunner-2.3.jar
-      
           mkdir -p $JMETER_HOME/lib/ext
           cp /tmp/JMeterPluginsManager.jar $JMETER_HOME/lib/ext/
           cp /tmp/cmdrunner-2.3.jar $JMETER_HOME/lib/
-      
-          echo "⚙️  Installing PluginManagerCMD..."
           java -cp $JMETER_HOME/lib/ext/JMeterPluginsManager.jar org.jmeterplugins.repository.PluginManagerCMDInstaller
-      
-          echo "🧩 Installing Ultimate Thread Group plugin..."
           $JMETER_HOME/bin/PluginsManagerCMD.sh install jpgc-casutg
-      
-          echo "✅ Plugin installation completed"
-          
+
       - name: Run JMeter Test
         run: |
           mkdir -p /tmp/results
           jmeter -n -t ./P01_HTTPBinAPI_PT_StreeTest.jmx \
                  -l /tmp/results/results.jtl \
                  -e -o /tmp/results/report
-          echo "✅ JMeter test completed"
 
       - name: Collect Reports
         run: |
-          echo "Collecting JMeter report and cAdvisor metrics..."
           mkdir -p /tmp/final_reports
           cp -r /tmp/results/report /tmp/final_reports/JMeter-Report
           curl -s http://localhost:8080/metrics > /tmp/final_reports/cadvisor_metrics.txt
-      
+
+      - name: Grafana Dashboard Snapshot URL
+        run: |
+          curl -s -u admin:admin \
+            -H "Content-Type: application/json" \
+            -X POST \
+            -d '{"dashboard":{"uid":"cadvisor"},"name":"cadvisor-snapshot","expires":3600}' \
+            http://localhost:3000/api/snapshots \
+            | jq -r '.url' > /tmp/final_reports/grafana/dashboard_url.txt
+
       - name: Upload All Reports
         uses: actions/upload-artifact@v4
         with:
