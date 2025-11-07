@@ -1,0 +1,29 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "cadvisor",
+    "title": "cAdvisor Metrics",
+    "panels": [
+      {
+        "type": "graph",
+        "title": "CPU Usage",
+        "targets": [{"expr": "container_cpu_usage_seconds_total"}]
+      },
+      {
+        "type": "graph",
+        "title": "Memory Usage",
+        "targets": [{"expr": "container_memory_usage_bytes"}]
+      },
+      {
+        "type": "graph",
+        "title": "Network RX",
+        "targets": [{"expr": "container_network_receive_bytes_total"}]
+      },
+      {
+        "type": "graph",
+        "title": "Network TX",
+        "targets": [{"expr": "container_network_transmit_bytes_total"}]
+      }
+    ]
+  }
+}
